@@ -204,64 +204,66 @@ def parse_coingecko_cookies(cookie_raw: str) -> dict:
 def get_coingecko_expiry_info(cookies: dict) -> dict:
     """
     Sprawdza ciasteczko remember_user_token CoinGecko i wyciąga datę ważności sesji.
+    W przypadku logowania przez Google/OAuth rozpoznaje aktywną sesję _session_id.
     """
     token = cookies.get("remember_user_token")
-    if not token:
+    if token:
+        try:
+            part = token.split("--")[0]
+            unquoted = urllib.parse.unquote(part)
+            data = json.loads(base64.b64decode(unquoted).decode("utf-8"))
+            exp_str = data.get("_rails", {}).get("exp")
+            if exp_str:
+                exp_dt = datetime.fromisoformat(exp_str.replace("Z", "+00:00"))
+                now = datetime.now(timezone.utc)
+                days_left = (exp_dt - now).days
+                date_fmt = exp_dt.strftime("%Y-%m-%d")
+
+                if days_left <= 0:
+                    warning_level = "expired"
+                    warning_message = "🚨 Sesja CoinGecko wygasła! Zaktualizuj ciasteczko w GitHub Secrets."
+                    display = f"🚨 Wygasła ({date_fmt})"
+                elif days_left <= 3:
+                    warning_level = "critical"
+                    warning_message = f"⚠️ PILNE: Twoja sesja CoinGecko wygasa za {days_left} dni ({date_fmt})!"
+                    display = f"🚨 Za {days_left} dni ({date_fmt})"
+                elif days_left <= 7:
+                    warning_level = "warning"
+                    warning_message = f"⚠️ Uwaga: Twoja sesja CoinGecko wygasa za {days_left} dni ({date_fmt})."
+                    display = f"⚠️ Za {days_left} dni ({date_fmt})"
+                else:
+                    warning_level = "normal"
+                    warning_message = f"Sesja CoinGecko ważna do {date_fmt} (pozostało {days_left} dni)"
+                    display = f"{date_fmt} (za {days_left} dni) ✅"
+
+                return {
+                    "has_expiry": True,
+                    "expiry_date": date_fmt,
+                    "days_left": days_left,
+                    "warning_level": warning_level,
+                    "warning_message": warning_message,
+                    "display": display,
+                }
+        except Exception:
+            pass
+
+    if cookies.get("_session_id") or cookies.get("_coingecko_session") or len(cookies) > 0:
         return {
-            "has_expiry": False,
-            "expiry_date": "Nieznana",
+            "has_expiry": True,
+            "expiry_date": "Aktywna sesja",
             "days_left": None,
-            "warning_level": "unknown",
-            "warning_message": "Brak tokenu remember_user_token",
-            "display": "Brak danych o ważności",
+            "warning_level": "normal",
+            "warning_message": "Sesja ciasteczek CoinGecko jest aktywna.",
+            "display": "Sesja aktywna (_session_id) ✅",
         }
-
-    try:
-        part = token.split("--")[0]
-        unquoted = urllib.parse.unquote(part)
-        data = json.loads(base64.b64decode(unquoted).decode("utf-8"))
-        exp_str = data.get("_rails", {}).get("exp")
-        if exp_str:
-            exp_dt = datetime.fromisoformat(exp_str.replace("Z", "+00:00"))
-            now = datetime.now(timezone.utc)
-            days_left = (exp_dt - now).days
-            date_fmt = exp_dt.strftime("%Y-%m-%d")
-
-            if days_left <= 0:
-                warning_level = "expired"
-                warning_message = "🚨 Sesja CoinGecko wygasła! Zaktualizuj ciasteczko w GitHub Secrets."
-                display = f"🚨 Wygasła ({date_fmt})"
-            elif days_left <= 3:
-                warning_level = "critical"
-                warning_message = f"⚠️ PILNE: Twoja sesja CoinGecko wygasa za {days_left} dni ({date_fmt})!"
-                display = f"🚨 Za {days_left} dni ({date_fmt})"
-            elif days_left <= 7:
-                warning_level = "warning"
-                warning_message = f"⚠️ Uwaga: Twoja sesja CoinGecko wygasa za {days_left} dni ({date_fmt})."
-                display = f"⚠️ Za {days_left} dni ({date_fmt})"
-            else:
-                warning_level = "normal"
-                warning_message = f"Sesja CoinGecko ważna do {date_fmt} (pozostało {days_left} dni)"
-                display = f"{date_fmt} (za {days_left} dni) ✅"
-
-            return {
-                "has_expiry": True,
-                "expiry_date": date_fmt,
-                "days_left": days_left,
-                "warning_level": warning_level,
-                "warning_message": warning_message,
-                "display": display,
-            }
-    except Exception:
-        pass
 
     return {
         "has_expiry": False,
         "expiry_date": "Nieznana",
         "days_left": None,
         "warning_level": "unknown",
-        "warning_message": "Nie udało się sparsować daty ważności sesji CoinGecko",
-        "display": "Nieznana",
+        "warning_message": "Brak ciasteczek sesyjnych CoinGecko",
+        "display": "Brak ciasteczek",
     }
 
 

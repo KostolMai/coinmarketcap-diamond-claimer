@@ -47,6 +47,7 @@ class CoinGeckoClaimer:
         # Załaduj ciasteczka do sesji
         for name, value in self.cookies.items():
             self.session.cookies.set(name, value, domain="coingecko.com")
+            self.session.cookies.set(name, value, domain="www.coingecko.com")
 
         self.headers = {
             "User-Agent": (
@@ -63,6 +64,8 @@ class CoinGeckoClaimer:
             "Sec-Fetch-User": "?1",
             "Upgrade-Insecure-Requests": "1",
         }
+        if Config.RAW_COINGECKO_COOKIE:
+            self.headers["Cookie"] = Config.RAW_COINGECKO_COOKIE
 
     def _fetch_page(self, url: str):
         """Pobiera stronę z obsługą impersonacji i nagłówków."""
