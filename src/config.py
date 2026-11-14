@@ -172,6 +172,8 @@ def get_token_expiry_info(token: str) -> dict:
 def parse_coingecko_cookies(cookie_raw: str) -> dict:
     """
     Parsuje ciąg ciasteczek CoinGecko.
+    Automatycznie odfiltrowuje gigantyczne ciasteczka zgód reklamowych/CMP (eupubconsent, __cmp, Optanon),
+    które przekraczają limit bufora nagłówków serwera (8KB) i powodują błąd HTTP 400.
     """
     if not cookie_raw or not cookie_raw.strip():
         return {}
@@ -192,11 +194,18 @@ def parse_coingecko_cookies(cookie_raw: str) -> dict:
             name, val = part.split("=", 1)
             name = name.strip()
             val = val.strip()
+            # Ignoruj ciasteczka zgód reklamowych CMP (ważące po kilkaset/kilka tysięcy bajtów)
+            if any(name.startswith(p) for p in ("__cmp", "eupubconsent", "Optanon")):
+                continue
             if name:
                 cookies[name] = val
 
     if not cookies and len(cleaned) > 20:
-        cookies["_coingecko_session"] = cleaned
+        if "=" in cleaned:
+            name, val = cleaned.split("=", 1)
+            cookies[name.strip()] = val.strip()
+        else:
+            cookies["_session_id"] = cleaned
 
     return cookies
 

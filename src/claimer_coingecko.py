@@ -44,10 +44,8 @@ class CoinGeckoClaimer:
                 "https": Config.PROXY_URL,
             }
 
-        # Załaduj ciasteczka do sesji
-        for name, value in self.cookies.items():
-            self.session.cookies.set(name, value, domain="coingecko.com")
-            self.session.cookies.set(name, value, domain="www.coingecko.com")
+        # Przygotuj jeden czysty nagłówek Cookie ze sparsowanych, niezbędnych ciasteczek (bez duplikacji)
+        clean_cookie_str = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
 
         self.headers = {
             "User-Agent": (
@@ -63,9 +61,8 @@ class CoinGeckoClaimer:
             "Sec-Fetch-Site": "same-origin",
             "Sec-Fetch-User": "?1",
             "Upgrade-Insecure-Requests": "1",
+            "Cookie": clean_cookie_str,
         }
-        if Config.RAW_COINGECKO_COOKIE:
-            self.headers["Cookie"] = Config.RAW_COINGECKO_COOKIE
 
     def _fetch_page(self, url: str):
         """Pobiera stronę z obsługą impersonacji i nagłówków."""
@@ -182,6 +179,14 @@ class CoinGeckoClaimer:
                     "Ciasteczka CoinGecko straciły ważność. Zaloguj się ponownie na coingecko.com "
                     "i zaktualizuj sekret COINGECKO_COOKIE w GitHub Secrets!"
                 ),
+            )
+
+        if res.status_code != 200:
+            print(f"[!] Błąd serwera CoinGecko HTTP {res.status_code}: {res.text[:250]}")
+            return ClaimResult(
+                success=False,
+                status=f"Błąd HTTP {res.status_code}",
+                message=f"Serwer CoinGecko zwrócił kod {res.status_code}: {res.text[:150]}",
             )
 
         soup = BeautifulSoup(res.text, "html.parser")
