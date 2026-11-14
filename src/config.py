@@ -37,9 +37,11 @@ def extract_bearer_token(raw_input: str) -> str:
         except Exception:
             pass
 
-    # 1. Format: 'Bearer <token>'
+    # 1. Format: 'Bearer <token>' lub 'BearereyJ...'
     if cleaned.lower().startswith("bearer "):
         return cleaned[7:].strip()
+    if cleaned.lower().startswith("bearereyj"):
+        return "eyJ" + cleaned[9:].strip()
 
     # 2. Format: JSON (np. skopiowane z localStorage 'u' lub odpowiedzi API)
     if cleaned.startswith("{") and cleaned.endswith("}"):
@@ -49,6 +51,8 @@ def extract_bearer_token(raw_input: str) -> str:
                 t = data["token"].strip()
                 if t.lower().startswith("bearer "):
                     return t[7:].strip()
+                if t.lower().startswith("bearereyj"):
+                    return "eyJ" + t[9:].strip()
                 return t
         except Exception:
             pass
@@ -61,16 +65,28 @@ def extract_bearer_token(raw_input: str) -> str:
                 val = part.split("=", 1)[1].strip()
                 try:
                     unquoted = urllib.parse.unquote(val)
-                    # Spróbuj najpierw zdekodować Unicode Base64
                     decoded_bytes = base64.b64decode(unquoted)
                     json_str = decoded_bytes.decode("utf-8")
                     data = json.loads(json_str)
                     if "token" in data:
-                        return data["token"].replace("Bearer ", "").strip()
+                        return data["token"].replace("Bearer ", "").replace("BearereyJ", "eyJ").strip()
                 except Exception:
                     pass
 
-    # 4. Sprawdzenie czy to bezpośredni JWT (trzy części oddzielone kropkami)
+    # 4. Sprawdzenie czy w ciągu jest 'Authorization=Bearer...' lub 'Authorization=BearereyJ...'
+    auth_match = re.search(r"Authorization=(?:Bearer\s*|BearereyJ)?([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)", cleaned, re.IGNORECASE)
+    if auth_match:
+        cand = auth_match.group(1).strip()
+        if not cand.startswith("eyJ") and "bearereyj" in auth_match.group(0).lower():
+            cand = "eyJ" + cand
+        return cand
+
+    # 5. Sprawdzenie czy to poprawny token JWT zaczynający się od standardowego prefiksu 'eyJ'
+    jwt_eyj_match = re.search(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", cleaned)
+    if jwt_eyj_match:
+        return jwt_eyj_match.group(0).strip()
+
+    # 6. Ogólne dopasowanie ciągu JWT (trzy części oddzielone kropkami)
     jwt_match = re.search(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", cleaned)
     if jwt_match:
         return jwt_match.group(0).strip()

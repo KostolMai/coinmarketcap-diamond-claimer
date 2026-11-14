@@ -63,6 +63,7 @@ class CMCClaimer:
             "Accept": "application/json, text/plain, */*",
             "Accept-Language": "en-US,en;q=0.9,pl;q=0.8",
             "Content-Type": "application/json",
+            "platform": "desktop",
             "Origin": Config.BASE_URL,
             "Referer": Config.MY_DIAMONDS_URL,
             "Authorization": Config.get_auth_header(),
@@ -138,7 +139,7 @@ class CMCClaimer:
             return "Brak danych"
 
         # Policz aktywne dni
-        checked_count = sum(1 for item in logs if item.get("state") is True)
+        checked_count = sum(1 for item in logs if item.get("state") in (True, 1))
         if checked_count > 0:
             return f"Dzień {checked_count}"
         return "1"
@@ -177,7 +178,7 @@ class CMCClaimer:
         if logs and isinstance(logs, list) and len(logs) > 0:
             # Ostatni element w tablicy reprezentuje dzisiejszy dzień
             today_log = logs[-1]
-            if today_log.get("state") is True:
+            if today_log.get("state") in (True, 1):
                 print("[+] Diamenty zostały już dzisiaj odebrane!")
                 return ClaimResult(
                     success=True,
@@ -233,9 +234,9 @@ class CMCClaimer:
                 streak=streak,
             )
 
-        # Sprawdzenie czy już odebrano (niektóre odpowiedzi API zwracają to jako specyficzny kod błędu)
-        if "already" in error_message.lower() or "checked in" in error_message.lower():
-            print("[+] API zgłasza: Diamenty zostały już odebrane.")
+        # Sprawdzenie czy już odebrano
+        if error_code == "10007" or "already" in error_message.lower() or "twice a day" in error_message.lower():
+            print("[+] API zgłasza: Diamenty zostały już dzisiaj odebrane.")
             return ClaimResult(
                 success=True,
                 status="Już odebrano",
