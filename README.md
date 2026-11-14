@@ -71,12 +71,13 @@ Aby bot mógł bezpiecznie pobierać diamenty na Twoim koncie w chmurze GitHub A
    - **Secret**: Wklej skopiowany w Kroku 1 token (np. `eyJhbGciOi...`).
    - Kliknij **Add secret**.
 
-### Opcjonalne powiadomienia (zalecane):
+### Opcjonalne powiadomienia i usługi:
 
 | Nazwa Sekretu | Opis | Wymagany? |
 | :--- | :--- | :--- |
-| `CMC_AUTH_TOKEN` | Twój token autoryzacyjny CoinMarketCap | **Tak** |
-| `DISCORD_WEBHOOK_URL` | URL webhooka Discord do odbierania powiadomień | Nie |
+| `CMC_AUTH_TOKEN` | Twój token autoryzacyjny CoinMarketCap | Wymagany dla diamentów CMC |
+| `COINGECKO_COOKIE` | Ciasteczko z CoinGecko (odbiera również cukierki!) | Opcjonalny (dla cukierków CG) |
+| `DISCORD_WEBHOOK_URL` | URL webhooka Discord do odbierania **JEDNEGO wspólnego powiadomienia** | Nie |
 | `TELEGRAM_BOT_TOKEN` | Token bota Telegram (z @BotFather) | Nie |
 | `TELEGRAM_CHAT_ID` | Twój identyfikator czatu Telegram (np. z @userinfobot) | Nie |
 | `PROXY_URL` | Własny serwer proxy (np. `http://user:pass@ip:port`) | Nie |

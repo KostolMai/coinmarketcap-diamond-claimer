@@ -2,63 +2,29 @@ import json
 import os
 import re
 from datetime import datetime, timezone
+from typing import Optional
 import requests
 from src.config import Config
 
 
 class Notifier:
     @staticmethod
-    def notify_all(
-        status: str,
-        message: str,
-        balance_before: str = "Brak danych",
-        balance_after: str = "Brak danych",
-        streak: str = "Brak danych",
-        success: bool = True,
-    ) -> None:
-        """Wysyła powiadomienia do wszystkich skonfigurowanych kanałów."""
-        Notifier.write_github_step_summary(
-            status=status,
-            message=message,
-            balance_before=balance_before,
-            balance_after=balance_after,
-            streak=streak,
-            success=success,
-        )
-
-        if Config.DISCORD_WEBHOOK_URL:
-            Notifier.send_discord_notification(
-                status=status,
-                message=message,
-                balance_before=balance_before,
-                balance_after=balance_after,
-                streak=streak,
-                success=success,
-            )
-
-        if Config.TELEGRAM_BOT_TOKEN and Config.TELEGRAM_CHAT_ID:
-            Notifier.send_telegram_notification(
-                status=status,
-                message=message,
-                balance_before=balance_before,
-                balance_after=balance_after,
-                streak=streak,
-                success=success,
-            )
-
-    @staticmethod
     def _compute_metrics(
         balance_before: str,
         balance_after: str,
         status: str,
         success: bool,
+        unit: str = "💎",
     ) -> tuple[str, str, str]:
         """
         Oblicza:
-        1. Ile diamentów przybyło (np. '+10 💎', '0 💎 (już odebrane dzisiaj)', '0 💎 (błąd)')
-        2. Ogólną sumę diamentów (np. '150 💎')
+        1. Ile przybyło (np. '+10 💎', '0 💎 (już odebrane dzisiaj)', '0 💎 (błąd)')
+        2. Ogólną sumę (np. '150 💎')
         3. Etykietę statusu (np. '✅ Sukces', '❌ Błąd')
         """
+        balance_before = str(balance_before or "Brak danych")
+        balance_after = str(balance_after or "Brak danych")
+        status = str(status or "")
         total = balance_after if balance_after != "Brak danych" else balance_before
 
         try:
@@ -70,20 +36,20 @@ class Notifier:
         if b_before is not None and b_after is not None:
             diff = b_after - b_before
             if diff > 0:
-                gained = f"+{diff} 💎"
+                gained = f"+{diff} {unit}"
             elif "już" in status.lower():
-                gained = "0 💎 (już odebrane dzisiaj)"
+                gained = f"0 {unit} (już odebrane dzisiaj)"
             elif not success:
-                gained = "0 💎 (błąd)"
+                gained = f"0 {unit} (błąd)"
             else:
-                gained = f"{diff} 💎"
+                gained = f"{diff} {unit}"
         else:
             if not success:
-                gained = "0 💎 (błąd)"
+                gained = f"0 {unit} (błąd)"
             elif "już" in status.lower():
-                gained = "0 💎 (już odebrane dzisiaj)"
+                gained = f"0 {unit} (już odebrane dzisiaj)"
             elif success and "odebrano" in status.lower():
-                gained = "+10-50 💎 (odebrano)"
+                gained = f"+10 {unit} (odebrano)"
             else:
                 gained = "Brak danych"
 
@@ -96,86 +62,35 @@ class Notifier:
         else:
             status_label = f"❌ Niepowodzenie ({status})"
 
-        total_str = f"{total} 💎" if total != "Brak danych" and "💎" not in total else total
+        total_str = f"{total} {unit}" if total != "Brak danych" and unit not in total else total
         return gained, total_str, status_label
 
     @staticmethod
-    def write_github_step_summary(
-        status: str,
-        message: str,
-        balance_before: str,
-        balance_after: str,
-        streak: str,
-        success: bool,
-    ) -> None:
-        """Zapisuje podsumowanie do GitHub Actions Step Summary."""
-        summary_path = os.getenv("GITHUB_STEP_SUMMARY")
-        if not summary_path:
-            return
-
+    def _build_cmc_embed(result) -> dict:
+        """Buduje kartę embed dla CoinMarketCap Diamonds."""
         gained, total, status_label = Notifier._compute_metrics(
-            balance_before, balance_after, status, success
-        )
-        expiry_info = Config.get_expiry_info()
-        now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-
-        markdown = f"""
-### {status_label} — CoinMarketCap Diamonds Raport
-
-| Parametr | Wartość |
-| :--- | :--- |
-| **Status operacji** | {status_label} |
-| **➕ Przybyło diamentów** | **`{gained}`** |
-| **💎 Ogólna suma diamentów** | **`{total}`** |
-| **⏳ Ważność sesji** | {expiry_info['display']} |
-| **Poprzedni stan konta** | `{balance_before}` 💎 |
-| **Streak (dni z rzędu)** | `{streak}` 🔥 |
-| **Szczegóły** | {message} |
-| **Data wykonania** | {now_str} |
-
----
-*Automatyczne zbieranie diamentów CoinMarketCap przez GitHub Actions.*
-"""
-        try:
-            with open(summary_path, "a", encoding="utf-8") as f:
-                f.write(markdown)
-        except Exception as e:
-            print(f"[!] Błąd zapisu GITHUB_STEP_SUMMARY: {e}")
-
-    @staticmethod
-    def send_discord_notification(
-        status: str,
-        message: str,
-        balance_before: str,
-        balance_after: str,
-        streak: str,
-        success: bool,
-    ) -> None:
-        """Wysyła szczegółowy i estetyczny raport embed na Discord."""
-        gained, total, status_label = Notifier._compute_metrics(
-            balance_before, balance_after, status, success
+            result.balance_before, result.balance_after, result.status, result.success, unit="💎"
         )
         expiry_info = Config.get_expiry_info()
 
-        # Dodaj widoczne ostrzeżenie w opisie, jeśli sesja zbliża się do końca (<= 7 dni)
-        description = message
+        description = result.message
         if expiry_info.get("warning_level") in ("warning", "critical", "expired"):
-            description = f"{expiry_info['warning_message']}\n\n{message}"
+            description = f"{expiry_info['warning_message']}\n\n{result.message}"
 
-        if not success:
+        if not result.success:
             title = "❌ CoinMarketCap: Niepowodzenie odbioru diamentów"
             color = 0xE74C3C  # Czerwony
         elif expiry_info.get("warning_level") == "critical":
             title = "⚠️ CoinMarketCap: Sesja wkrótce wygasa!"
             color = 0xE67E22  # Pomarańczowy
-        elif "już" in status.lower():
+        elif "już" in result.status.lower():
             title = "ℹ️ CoinMarketCap: Diamenty zostały już dzisiaj odebrane"
             color = 0x3498DB  # Niebieski
         else:
             title = "💎 CoinMarketCap: Pomyślnie odebrano codzienne diamenty!"
             color = 0x2ECC71  # Zielony
 
-        embed = {
+        return {
             "title": title,
             "description": description,
             "color": color,
@@ -183,78 +98,203 @@ class Notifier:
                 {"name": "📊 Status", "value": status_label, "inline": False},
                 {"name": "➕ Przybyło", "value": f"**{gained}**", "inline": True},
                 {"name": "💎 Ogólna suma", "value": f"**{total}**", "inline": True},
-                {"name": "🔥 Dni z rzędu (Streak)", "value": f"{streak}", "inline": True},
+                {"name": "🔥 Dni z rzędu (Streak)", "value": f"{result.streak}", "inline": True},
                 {"name": "⏳ Ważność sesji", "value": expiry_info["display"], "inline": True},
             ],
             "footer": {
-                "text": "CoinMarketCap Diamond Auto-Claimer • GitHub Actions",
+                "text": "CoinMarketCap Diamond Auto-Claimer",
                 "icon_url": "https://s2.coinmarketcap.com/static/cloud/img/coinmarketcap_logo_mobile.png",
             },
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-        payload = {
-            "username": "CoinMarketCap Diamond Bot",
-            "avatar_url": "https://s2.coinmarketcap.com/static/cloud/img/coinmarketcap_logo_mobile.png",
-            "embeds": [embed],
-        }
+    @staticmethod
+    def _build_cg_embed(result) -> dict:
+        """Buduje kartę embed dla CoinGecko Candies."""
+        gained, total, status_label = Notifier._compute_metrics(
+            result.balance_before, result.balance_after, result.status, result.success, unit="🍬"
+        )
+        expiry_info = Config.get_coingecko_expiry()
 
-        try:
-            res = requests.post(
-                Config.DISCORD_WEBHOOK_URL,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=10,
-            )
-            if res.status_code in (200, 204):
-                print("[+] Powiadomienie Discord wysłane pomyślnie.")
-            else:
-                print(f"[!] Błąd wysyłania na Discord (kod {res.status_code}): {res.text}")
-        except Exception as e:
-            print(f"[!] Nie udało się wysłać powiadomienia Discord: {e}")
+        description = result.message
+        if expiry_info.get("warning_level") in ("warning", "critical", "expired"):
+            description = f"{expiry_info['warning_message']}\n\n{result.message}"
+
+        if not result.success:
+            title = "❌ CoinGecko: Niepowodzenie odbioru cukierków"
+            color = 0xE74C3C
+        elif expiry_info.get("warning_level") == "critical":
+            title = "⚠️ CoinGecko: Sesja wkrótce wygasa!"
+            color = 0xE67E22
+        elif "już" in result.status.lower():
+            title = "ℹ️ CoinGecko: Cukierki zostały już dzisiaj odebrane"
+            color = 0x3498DB
+        else:
+            title = "🍬 CoinGecko: Pomyślnie odebrano codzienne cukierki!"
+            color = 0x2ECC71
+
+        return {
+            "title": title,
+            "description": description,
+            "color": color,
+            "fields": [
+                {"name": "📊 Status", "value": status_label, "inline": False},
+                {"name": "➕ Przybyło", "value": f"**{gained}**", "inline": True},
+                {"name": "🍬 Ogólna suma", "value": f"**{total}**", "inline": True},
+                {"name": "🔥 Dni z rzędu (Streak)", "value": f"{result.streak}", "inline": True},
+                {"name": "⏳ Ważność sesji", "value": expiry_info["display"], "inline": True},
+            ],
+            "footer": {
+                "text": "CoinGecko Candy Auto-Claimer",
+                "icon_url": "https://static.coingecko.com/s/thumbnail-00f7877a3903b9ae80112f47f8237b63d1496336a670300b00401322f50f1469.png",
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
 
     @staticmethod
-    def send_telegram_notification(
+    def notify_combined(cg_result=None, cmc_result=None) -> None:
+        """
+        Wysyła JEDNO połączone powiadomienie (zawierające CoinGecko i/lub CoinMarketCap).
+        """
+        # 1. Zapisz do GitHub Actions Step Summary
+        summary_path = os.getenv("GITHUB_STEP_SUMMARY")
+        if summary_path:
+            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            md_parts = [f"## 🎁 Codzienny Raport Nagród Krypto — {now_str}\n"]
+
+            if cg_result:
+                cg_gained, cg_total, cg_status = Notifier._compute_metrics(
+                    cg_result.balance_before, cg_result.balance_after, cg_result.status, cg_result.success, unit="🍬"
+                )
+                cg_exp = Config.get_coingecko_expiry()
+                md_parts.append(f"""
+### 🍬 CoinGecko Candy ({cg_status})
+
+| Parametr | Wartość |
+| :--- | :--- |
+| **Status operacji** | {cg_status} |
+| **➕ Przybyło cukierków** | **`{cg_gained}`** |
+| **💰 Ogólna suma cukierków** | **`{cg_total}`** |
+| **⏳ Ważność sesji** | {cg_exp['display']} |
+| **Streak (dni z rzędu)** | `{cg_result.streak}` 🔥 |
+| **Szczegóły** | {cg_result.message} |
+""")
+
+            if cmc_result:
+                cmc_gained, cmc_total, cmc_status = Notifier._compute_metrics(
+                    cmc_result.balance_before, cmc_result.balance_after, cmc_result.status, cmc_result.success, unit="💎"
+                )
+                cmc_exp = Config.get_expiry_info()
+                md_parts.append(f"""
+### 💎 CoinMarketCap Diamonds ({cmc_status})
+
+| Parametr | Wartość |
+| :--- | :--- |
+| **Status operacji** | {cmc_status} |
+| **➕ Przybyło diamentów** | **`{cmc_gained}`** |
+| **💎 Ogólna suma diamentów** | **`{cmc_total}`** |
+| **⏳ Ważność sesji** | {cmc_exp['display']} |
+| **Streak (dni z rzędu)** | `{cmc_result.streak}` 🔥 |
+| **Szczegóły** | {cmc_result.message} |
+""")
+
+            md_parts.append("\n---\n*Automatyczne zbieranie nagród przez GitHub Actions.*")
+            try:
+                with open(summary_path, "a", encoding="utf-8") as f:
+                    f.write("\n".join(md_parts))
+            except Exception as e:
+                print(f"[!] Błąd zapisu GITHUB_STEP_SUMMARY: {e}")
+
+        # 2. Wyślij JEDNĄ wiadomość na Discord (z dwiema kartami embed)
+        if Config.DISCORD_WEBHOOK_URL:
+            embeds = []
+            if cg_result:
+                embeds.append(Notifier._build_cg_embed(cg_result))
+            if cmc_result:
+                embeds.append(Notifier._build_cmc_embed(cmc_result))
+
+            if embeds:
+                payload = {
+                    "username": "Crypto Daily Rewards",
+                    "avatar_url": "https://s2.coinmarketcap.com/static/cloud/img/coinmarketcap_logo_mobile.png",
+                    "embeds": embeds,
+                }
+                try:
+                    res = requests.post(
+                        Config.DISCORD_WEBHOOK_URL,
+                        json=payload,
+                        headers={"Content-Type": "application/json"},
+                        timeout=10,
+                    )
+                    if res.status_code in (200, 204):
+                        print("[+] Wspólne powiadomienie Discord wysłane pomyślnie.")
+                    else:
+                        print(f"[!] Błąd wysyłania na Discord (kod {res.status_code}): {res.text}")
+                except Exception as e:
+                    print(f"[!] Nie udało się wysłać powiadomienia Discord: {e}")
+
+        # 3. Wyślij JEDNĄ wiadomość na Telegram
+        if Config.TELEGRAM_BOT_TOKEN and Config.TELEGRAM_CHAT_ID:
+            sections = ["<b>🎁 Codzienny Raport Nagród Krypto</b>\n"]
+            if cg_result:
+                cg_gained, cg_total, cg_status = Notifier._compute_metrics(
+                    cg_result.balance_before, cg_result.balance_after, cg_result.status, cg_result.success, unit="🍬"
+                )
+                cg_exp = Config.get_coingecko_expiry()
+                sections.append(
+                    f"<b>🍬 CoinGecko:</b>\n"
+                    f"• Status: {cg_status}\n"
+                    f"• Przybyło: <b>{cg_gained}</b>\n"
+                    f"• Suma: <b>{cg_total}</b>\n"
+                    f"• Streak: {cg_result.streak}\n"
+                    f"• Ważność sesji: {cg_exp['display']}\n"
+                )
+            if cmc_result:
+                cmc_gained, cmc_total, cmc_status = Notifier._compute_metrics(
+                    cmc_result.balance_before, cmc_result.balance_after, cmc_result.status, cmc_result.success, unit="💎"
+                )
+                cmc_exp = Config.get_expiry_info()
+                sections.append(
+                    f"<b>💎 CoinMarketCap:</b>\n"
+                    f"• Status: {cmc_status}\n"
+                    f"• Przybyło: <b>{cmc_gained}</b>\n"
+                    f"• Suma: <b>{cmc_total}</b>\n"
+                    f"• Streak: {cmc_result.streak}\n"
+                    f"• Ważność sesji: {cmc_exp['display']}\n"
+                )
+
+            url = f"https://api.telegram.org/bot{Config.TELEGRAM_BOT_TOKEN}/sendMessage"
+            payload = {
+                "chat_id": Config.TELEGRAM_CHAT_ID,
+                "text": "\n".join(sections),
+                "parse_mode": "HTML",
+            }
+            try:
+                res = requests.post(url, json=payload, timeout=10)
+                if res.status_code == 200:
+                    print("[+] Powiadomienie Telegram wysłane pomyślnie.")
+                else:
+                    print(f"[!] Błąd wysyłania na Telegram: {res.text}")
+            except Exception as e:
+                print(f"[!] Nie udało się wysłać powiadomienia Telegram: {e}")
+
+    @staticmethod
+    def notify_all(
         status: str,
         message: str,
-        balance_before: str,
-        balance_after: str,
-        streak: str,
-        success: bool,
+        balance_before: str = "Brak danych",
+        balance_after: str = "Brak danych",
+        streak: str = "Brak danych",
+        success: bool = True,
     ) -> None:
-        """Wysyła wiadomość na Telegram."""
-        gained, total, status_label = Notifier._compute_metrics(
-            balance_before, balance_after, status, success
+        """Fallback do pojedynczych powiadomień lub błędów konfiguracyjnych."""
+        from src.claimer import ClaimResult
+        dummy = ClaimResult(
+            success=success,
+            status=status,
+            message=message,
+            balance_before=balance_before,
+            balance_after=balance_after,
+            streak=streak,
         )
-        expiry_info = Config.get_expiry_info()
-
-        warning_line = ""
-        if expiry_info.get("warning_level") in ("warning", "critical", "expired"):
-            warning_line = f"\n<b>Ostrzeżenie:</b> {expiry_info['warning_message']}\n"
-
-        text = (
-            f"<b>💎 CoinMarketCap Diamond Raport</b>\n\n"
-            f"<b>Status:</b> {status_label}\n"
-            f"<b>➕ Przybyło:</b> <b>{gained}</b>\n"
-            f"<b>💎 Ogólna suma:</b> <b>{total}</b>\n"
-            f"<b>🔥 Dni z rzędu:</b> {streak}\n"
-            f"<b>⏳ Ważność sesji:</b> {expiry_info['display']}\n"
-            f"{warning_line}"
-            f"<b>📝 Komunikat:</b> {message}\n"
-        )
-
-        url = f"https://api.telegram.org/bot{Config.TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": Config.TELEGRAM_CHAT_ID,
-            "text": text,
-            "parse_mode": "HTML",
-        }
-
-        try:
-            res = requests.post(url, json=payload, timeout=10)
-            if res.status_code == 200:
-                print("[+] Powiadomienie Telegram wysłane pomyślnie.")
-            else:
-                print(f"[!] Błąd wysyłania na Telegram (kod {res.status_code}): {res.text}")
-        except Exception as e:
-            print(f"[!] Nie udało się wysłać powiadomienia Telegram: {e}")
+        Notifier.notify_combined(cmc_result=dummy)

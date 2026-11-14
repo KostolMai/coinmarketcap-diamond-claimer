@@ -46,10 +46,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 💎 Uruchomienie skryptu odbioru diamentów
+      - name: 🎁 Uruchomienie skryptu odbioru nagród krypto (CoinGecko & CoinMarketCap)
         env:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           CMC_AUTH_TOKEN: ${{ secrets.CMC_AUTH_TOKEN }}
+          COINGECKO_COOKIE: ${{ secrets.COINGECKO_COOKIE }}
           PROXY_URL: ${{ secrets.PROXY_URL }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}

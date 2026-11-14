@@ -169,14 +169,113 @@ def get_token_expiry_info(token: str) -> dict:
     }
 
 
+def parse_coingecko_cookies(cookie_raw: str) -> dict:
+    """
+    Parsuje ciąg ciasteczek CoinGecko.
+    """
+    if not cookie_raw or not cookie_raw.strip():
+        return {}
+
+    cleaned = cookie_raw.strip().strip("'\"")
+    if len(cleaned) < 255:
+        try:
+            if Path(cleaned).is_file():
+                with open(cleaned, "r", encoding="utf-8") as f:
+                    cleaned = f.read().strip()
+        except Exception:
+            pass
+
+    cookies = {}
+    parts = cleaned.split(";")
+    for part in parts:
+        if "=" in part:
+            name, val = part.split("=", 1)
+            name = name.strip()
+            val = val.strip()
+            if name:
+                cookies[name] = val
+
+    if not cookies and len(cleaned) > 20:
+        cookies["_coingecko_session"] = cleaned
+
+    return cookies
+
+
+def get_coingecko_expiry_info(cookies: dict) -> dict:
+    """
+    Sprawdza ciasteczko remember_user_token CoinGecko i wyciąga datę ważności sesji.
+    """
+    token = cookies.get("remember_user_token")
+    if not token:
+        return {
+            "has_expiry": False,
+            "expiry_date": "Nieznana",
+            "days_left": None,
+            "warning_level": "unknown",
+            "warning_message": "Brak tokenu remember_user_token",
+            "display": "Brak danych o ważności",
+        }
+
+    try:
+        part = token.split("--")[0]
+        unquoted = urllib.parse.unquote(part)
+        data = json.loads(base64.b64decode(unquoted).decode("utf-8"))
+        exp_str = data.get("_rails", {}).get("exp")
+        if exp_str:
+            exp_dt = datetime.fromisoformat(exp_str.replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            days_left = (exp_dt - now).days
+            date_fmt = exp_dt.strftime("%Y-%m-%d")
+
+            if days_left <= 0:
+                warning_level = "expired"
+                warning_message = "🚨 Sesja CoinGecko wygasła! Zaktualizuj ciasteczko w GitHub Secrets."
+                display = f"🚨 Wygasła ({date_fmt})"
+            elif days_left <= 3:
+                warning_level = "critical"
+                warning_message = f"⚠️ PILNE: Twoja sesja CoinGecko wygasa za {days_left} dni ({date_fmt})!"
+                display = f"🚨 Za {days_left} dni ({date_fmt})"
+            elif days_left <= 7:
+                warning_level = "warning"
+                warning_message = f"⚠️ Uwaga: Twoja sesja CoinGecko wygasa za {days_left} dni ({date_fmt})."
+                display = f"⚠️ Za {days_left} dni ({date_fmt})"
+            else:
+                warning_level = "normal"
+                warning_message = f"Sesja CoinGecko ważna do {date_fmt} (pozostało {days_left} dni)"
+                display = f"{date_fmt} (za {days_left} dni) ✅"
+
+            return {
+                "has_expiry": True,
+                "expiry_date": date_fmt,
+                "days_left": days_left,
+                "warning_level": warning_level,
+                "warning_message": warning_message,
+                "display": display,
+            }
+    except Exception:
+        pass
+
+    return {
+        "has_expiry": False,
+        "expiry_date": "Nieznana",
+        "days_left": None,
+        "warning_level": "unknown",
+        "warning_message": "Nie udało się sparsować daty ważności sesji CoinGecko",
+        "display": "Nieznana",
+    }
+
+
 class Config:
-    # Pobieranie tokenu z CMC_AUTH_TOKEN lub CMC_COOKIE
+    # CoinMarketCap
     RAW_TOKEN: str = (
         os.getenv("CMC_AUTH_TOKEN")
         or os.getenv("CMC_COOKIE")
         or os.getenv("COINMARKETCAP_TOKEN")
         or ""
     ).strip()
+
+    # CoinGecko
+    RAW_COINGECKO_COOKIE: str = os.getenv("COINGECKO_COOKIE", "").strip()
 
     DISCORD_WEBHOOK_URL: str = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -191,6 +290,11 @@ class Config:
     USER_POINT_SUMMARY_URL: str = "https://api.coinmarketcap.com/asset/v3/loyalty/user-point-summary"
     LATEST_LOGS_URL: str = "https://api.coinmarketcap.com/asset/v3/loyalty/latest-check-in-logs"
 
+    # URL-e CoinGecko
+    COINGECKO_BASE_URL: str = "https://www.coingecko.com"
+    COINGECKO_CANDY_URL: str = "https://www.coingecko.com/account/candy?locale=en"
+    COINGECKO_CHECK_IN_URL: str = "https://www.coingecko.com/account/candy/daily_check_in"
+
     @classmethod
     def get_token(cls) -> str:
         return extract_bearer_token(cls.RAW_TOKEN)
@@ -203,9 +307,27 @@ class Config:
         return f"Bearer {token}"
 
     @classmethod
-    def validate(cls) -> bool:
+    def get_coingecko_cookies(cls) -> dict:
+        return parse_coingecko_cookies(cls.RAW_COINGECKO_COOKIE)
+
+    @classmethod
+    def has_cmc(cls) -> bool:
         return bool(cls.get_token())
+
+    @classmethod
+    def has_coingecko(cls) -> bool:
+        cookies = cls.get_coingecko_cookies()
+        return bool(cookies.get("_coingecko_session") or len(cookies) > 0)
+
+    @classmethod
+    def validate(cls) -> bool:
+        return cls.has_cmc() or cls.has_coingecko()
 
     @classmethod
     def get_expiry_info(cls) -> dict:
         return get_token_expiry_info(cls.get_token())
+
+    @classmethod
+    def get_coingecko_expiry(cls) -> dict:
+        return get_coingecko_expiry_info(cls.get_coingecko_cookies())
+
