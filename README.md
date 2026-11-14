@@ -32,7 +32,9 @@ Do działania potrzebujesz jedynie:
 
 ---
 
-## 🔑 Krok 1: Jak pobrać token autoryzacyjny (`CMC_AUTH_TOKEN`)
+## 📝 Jak uruchomić bota (Krok po kroku)
+
+### 🔑 Krok 1: Jak pobrać token autoryzacyjny (`CMC_AUTH_TOKEN`)
 
 CoinMarketCap zabezpiecza swoje API za pomocą tokenu sesyjnego (JWT), przekazywanego w nagłówku `Authorization: Bearer <token>`.
 
@@ -57,7 +59,7 @@ CoinMarketCap zabezpiecza swoje API za pomocą tokenu sesyjnego (JWT), przekazyw
 
 ---
 
-## ⚙️ Krok 2: Konfiguracja GitHub Secrets
+### ⚙️ Krok 2: Konfiguracja GitHub Secrets
 
 Aby bot mógł bezpiecznie pobierać diamenty na Twoim koncie w chmurze GitHub Actions:
 
@@ -81,7 +83,7 @@ Aby bot mógł bezpiecznie pobierać diamenty na Twoim koncie w chmurze GitHub A
 
 ---
 
-## 🚀 Krok 3: Ręczne przetestowanie bota
+### 🚀 Krok 3: Ręczne przetestowanie bota
 
 Nie musisz czekać do rana, aby sprawdzić czy wszystko działa poprawnie!
 
