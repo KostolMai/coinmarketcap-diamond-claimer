@@ -1,16 +1,7 @@
 name: CoinMarketCap Daily Diamonds Auto-Claimer
 
 on:
-  schedule:
-    # Czas letni w Polsce (kwiecień - październik, CEST = UTC+2):
-    # 03:25 UTC = 05:25 czasu polskiego
-    - cron: '25 3 * 4-10 *'
-
-    # Czas zimowy w Polsce (listopad - marzec, CET = UTC+1):
-    # 04:25 UTC = 05:25 czasu polskiego
-    - cron: '25 4 * 1,2,3,11,12 *'
-
-  workflow_dispatch: # Umożliwia natychmiastowe ręczne uruchomienie z zakładki "Actions"
+  workflow_dispatch: # Uruchamiane wyłącznie przez cron-job.org (API dispatch) lub ręcznie w zakładce "Actions"
 
 concurrency:
   group: coinmarketcap-diamonds
