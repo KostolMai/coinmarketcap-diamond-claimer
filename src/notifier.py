@@ -66,91 +66,150 @@ class Notifier:
         return gained, total_str, status_label
 
     @staticmethod
-    def _build_cmc_embed(result) -> dict:
-        """Buduje kartę embed dla CoinMarketCap Diamonds."""
-        gained, total, status_label = Notifier._compute_metrics(
-            result.balance_before, result.balance_after, result.status, result.success, unit="💎"
-        )
-        expiry_info = Config.get_expiry_info()
+    def _parse_balance(val: str) -> Optional[int]:
+        if not val or str(val).strip() in ("Brak danych", "None", ""):
+            return None
+        m = re.search(r"\d+", str(val).replace(",", "").replace(" ", ""))
+        return int(m.group()) if m else None
 
-        description = result.message
-        if expiry_info.get("warning_level") in ("warning", "critical", "expired"):
-            description = f"{expiry_info['warning_message']}\n\n{result.message}"
-
-        if not result.success:
-            title = "❌ CoinMarketCap: Niepowodzenie odbioru diamentów"
-            color = 0xE74C3C  # Czerwony
-        elif expiry_info.get("warning_level") == "critical":
-            title = "⚠️ CoinMarketCap: Sesja wkrótce wygasa!"
-            color = 0xE67E22  # Pomarańczowy
-        elif "już" in result.status.lower():
-            title = "ℹ️ CoinMarketCap: Diamenty zostały już dzisiaj odebrane"
-            color = 0x3498DB  # Niebieski
+    @staticmethod
+    def _extract_account_data(res, unit: str, default_name: str, expiry_info: dict) -> dict:
+        lbl = getattr(res, "account_label", "")
+        if lbl == "Konto 1":
+            name = "CoinGecko #1"
+            full_name = "CoinGecko (Konto 1)"
+        elif lbl == "Konto 2":
+            name = "CoinGecko #2"
+            full_name = "CoinGecko (Konto 2)"
+        elif lbl:
+            name = f"CoinGecko ({lbl})"
+            full_name = f"CoinGecko ({lbl})"
         else:
-            title = "💎 CoinMarketCap: Pomyślnie odebrano codzienne diamenty!"
-            color = 0x2ECC71  # Zielony
+            name = default_name
+            full_name = default_name
+
+        icon = "🍬" if unit == "🍬" else "💎"
+
+        b_before = Notifier._parse_balance(res.balance_before)
+        b_after = Notifier._parse_balance(res.balance_after)
+        status_raw = str(res.status or "").strip()
+        status_lower = status_raw.lower()
+
+        if b_before is not None and b_after is not None:
+            diff = b_after - b_before
+        elif res.success and ("odebrano" in status_lower or "sukces" in status_lower):
+            diff = 10
+        else:
+            diff = 0
+
+        if not res.success:
+            status_short = "Błąd"
+            status_full = f"❌ Błąd ({status_raw})" if status_raw else "❌ Błąd"
+        elif "już" in status_lower:
+            status_short = "Już odebrano"
+            status_full = "ℹ️ Już odebrano dzisiaj"
+        elif res.success and ("odebrano" in status_lower or "sukces" in status_lower or diff > 0):
+            status_short = "Odebrano"
+            status_full = "✅ Sukces (Odebrano)"
+        else:
+            status_short = status_raw[:12] if status_raw else "Nieznany"
+            status_full = f"✅ {status_raw}" if status_raw else "Nieznany"
+
+        gain_short = f"+{diff}" if diff > 0 else "0"
+        gain_full = f"+{diff} {unit}" if diff > 0 else f"0 {unit}"
+
+        tot = b_after if b_after is not None else b_before
+        total_short = f"{tot} {unit}" if tot is not None else f"? {unit}"
+        total_full = f"{tot} {unit}" if tot is not None else "Brak danych"
+
+        warning = None
+        if expiry_info.get("warning_level") in ("warning", "critical", "expired"):
+            warning = expiry_info.get("warning_message")
 
         return {
-            "title": title,
-            "description": description,
-            "color": color,
-            "fields": [
-                {"name": "📊 Status", "value": status_label, "inline": False},
-                {"name": "➕ Przybyło", "value": f"**{gained}**", "inline": True},
-                {"name": "💎 Ogólna suma", "value": f"**{total}**", "inline": True},
-                {"name": "🔥 Dni z rzędu (Streak)", "value": f"{result.streak}", "inline": True},
-                {"name": "⏳ Ważność sesji", "value": expiry_info["display"], "inline": True},
-            ],
-            "footer": {
-                "text": "CoinMarketCap Diamond Auto-Claimer",
-                "icon_url": "https://s2.coinmarketcap.com/static/cloud/img/coinmarketcap_logo_mobile.png",
-            },
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "name": name,
+            "full_name": full_name,
+            "icon": icon,
+            "unit": unit,
+            "status_short": status_short,
+            "status_full": status_full,
+            "gain_short": gain_short,
+            "gain_full": gain_full,
+            "total_short": total_short,
+            "total_full": total_full,
+            "diff": diff,
+            "streak": str(res.streak or "1"),
+            "expiry_display": expiry_info.get("display", "Brak danych"),
+            "warning": warning,
+            "error": res.message if not res.success else None,
+            "message": res.message,
+            "success": res.success,
         }
 
     @staticmethod
-    def _build_cg_embed(result) -> dict:
-        """Buduje kartę embed dla CoinGecko Candies."""
-        account_label = getattr(result, "account_label", "") or "Konto 1"
-        gained, total, status_label = Notifier._compute_metrics(
-            result.balance_before, result.balance_after, result.status, result.success, unit="🍬"
-        )
-        if account_label == "Konto 2":
-            expiry_info = Config.get_coingecko_expiry_2()
-        else:
-            expiry_info = Config.get_coingecko_expiry()
+    def _build_unified_table(accounts_data: list[dict]) -> str:
+        """
+        Buduje czytelną tabelkę w bloku monospace dopasowaną do Discorda i Telegrama.
+        Szerokość wiersza to dokładnie 44 znaki (mieści się idealnie bez zawijania na telefonach).
+        """
+        col1, col2, col3, col4 = "Usługa", "Status", "Zysk", "Suma"
+        header = f"{col1:<15}{col2:<13}{col3:>6}{col4:>10}"
+        sep = "─" * len(header)
+        lines = [header, sep]
+        for acc in accounts_data:
+            lines.append(f"{acc['name']:<15}{acc['status_short']:<13}{acc['gain_short']:>6}{acc['total_short']:>10}")
+        return "\n".join(lines)
 
-        description = result.message
-        if expiry_info.get("warning_level") in ("warning", "critical", "expired"):
-            description = f"{expiry_info['warning_message']}\n\n{result.message}"
+    @staticmethod
+    def _build_unified_embed(accounts_data: list[dict]) -> dict:
+        """
+        Buduje JEDNO powiadomienie Embed dla Discorda zawierające tabelkę i podsumowanie.
+        """
+        table_str = Notifier._build_unified_table(accounts_data)
 
-        if not result.success:
-            title = f"❌ CoinGecko ({account_label}): Niepowodzenie odbioru cukierków"
-            color = 0xE74C3C
-        elif expiry_info.get("warning_level") == "critical":
-            title = f"⚠️ CoinGecko ({account_label}): Sesja wkrótce wygasa!"
-            color = 0xE67E22
-        elif "już" in result.status.lower():
-            title = f"ℹ️ CoinGecko ({account_label}): Cukierki zostały już dzisiaj odebrane"
-            color = 0x3498DB
+        desc_lines = [
+            f"```text\n{table_str}\n```",
+            "**Szczegóły kont:**",
+        ]
+        for acc in accounts_data:
+            desc_lines.append(
+                f"• {acc['icon']} **{acc['name']}**: Streak: **{acc['streak']}** 🔥 • Ważność sesji: `{acc['expiry_display']}`"
+            )
+
+        warnings = [f"• ⚠️ **{acc['name']}**: {acc['warning']}" for acc in accounts_data if acc.get("warning")]
+        if warnings:
+            desc_lines.append("\n**⚠️ Ostrzeżenia dotyczące sesji:**")
+            desc_lines.extend(warnings)
+
+        errors = [f"• ❌ **{acc['name']}**: {acc['error']}" for acc in accounts_data if acc.get("error")]
+        if errors:
+            desc_lines.append("\n**❌ Błędy:**")
+            desc_lines.extend(errors)
+
+        any_fail = any(not acc["success"] for acc in accounts_data)
+        any_warn = any(bool(acc.get("warning")) for acc in accounts_data)
+        any_claimed = any(acc["diff"] > 0 for acc in accounts_data)
+
+        if any_fail:
+            title = "❌ Codzienny Raport: Błąd odbioru nagród"
+            color = 0xE74C3C  # Czerwony
+        elif any_warn:
+            title = "⚠️ Codzienny Raport: Sesja wkrótce wygasa!"
+            color = 0xE67E22  # Pomarańczowy
+        elif any_claimed:
+            title = "🎁 Codzienny Raport: Odebrano codzienne nagrody!"
+            color = 0x2ECC71  # Zielony
         else:
-            title = f"🍬 CoinGecko ({account_label}): Pomyślnie odebrano codzienne cukierki!"
-            color = 0x2ECC71
+            title = "ℹ️ Codzienny Raport: Nagrody już odebrane dzisiaj"
+            color = 0x3498DB  # Niebieski
 
         return {
             "title": title,
-            "description": description,
+            "description": "\n".join(desc_lines),
             "color": color,
-            "fields": [
-                {"name": "📊 Status", "value": status_label, "inline": False},
-                {"name": "➕ Przybyło", "value": f"**{gained}**", "inline": True},
-                {"name": "🍬 Ogólna suma", "value": f"**{total}**", "inline": True},
-                {"name": "🔥 Dni z rzędu (Streak)", "value": f"{result.streak}", "inline": True},
-                {"name": "⏳ Ważność sesji", "value": expiry_info["display"], "inline": True},
-            ],
             "footer": {
-                "text": f"CoinGecko Candy Auto-Claimer • {account_label}",
-                "icon_url": "https://static.coingecko.com/s/thumbnail-00f7877a3903b9ae80112f47f8237b63d1496336a670300b00401322f50f1469.png",
+                "text": "Crypto Daily Rewards Auto-Claimer • CoinGecko & CoinMarketCap",
+                "icon_url": "https://s2.coinmarketcap.com/static/cloud/img/coinmarketcap_logo_mobile.png",
             },
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
@@ -158,124 +217,103 @@ class Notifier:
     @staticmethod
     def notify_combined(cg_result=None, cmc_result=None, cg_results=None) -> None:
         """
-        Wysyła JEDNO połączone powiadomienie (zawierające CoinGecko dla jednego lub wielu kont i/lub CoinMarketCap).
+        Wysyła JEDNO połączone powiadomienie (zawierające czytelną tabelkę dla wszystkich kont).
         """
         if cg_results is None:
             cg_results = [cg_result] if cg_result else []
 
-        # 1. Zapisz do GitHub Actions Step Summary
+        accounts_data = []
+        for cg_res in cg_results:
+            lbl = getattr(cg_res, "account_label", "") or "Konto 1"
+            exp = Config.get_coingecko_expiry_2() if lbl == "Konto 2" else Config.get_coingecko_expiry()
+            accounts_data.append(Notifier._extract_account_data(cg_res, unit="🍬", default_name="CoinGecko", expiry_info=exp))
+
+        if cmc_result:
+            cmc_exp = Config.get_expiry_info()
+            accounts_data.append(Notifier._extract_account_data(cmc_result, unit="💎", default_name="CoinMarketCap", expiry_info=cmc_exp))
+
+        if not accounts_data:
+            return
+
+        # 1. Zapisz do GitHub Actions Step Summary (czytelna tabela Markdown)
         summary_path = os.getenv("GITHUB_STEP_SUMMARY")
         if summary_path:
             now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-            md_parts = [f"## 🎁 Codzienny Raport Nagród Krypto — {now_str}\n"]
-
-            for cg_res in cg_results:
-                lbl = getattr(cg_res, "account_label", "") or "Konto 1"
-                cg_gained, cg_total, cg_status = Notifier._compute_metrics(
-                    cg_res.balance_before, cg_res.balance_after, cg_res.status, cg_res.success, unit="🍬"
+            md_lines = [
+                f"## 🎁 Codzienny Raport Nagród Krypto — {now_str}\n",
+                "| Usługa | Status | Zysk | Saldo | Seria (Streak) | Ważność sesji |",
+                "| :--- | :--- | :---: | :---: | :---: | :--- |",
+            ]
+            for acc in accounts_data:
+                md_lines.append(
+                    f"| {acc['icon']} **{acc['full_name']}** | {acc['status_full']} | `{acc['gain_full']}` | **{acc['total_full']}** | `{acc['streak']}` 🔥 | {acc['expiry_display']} |"
                 )
-                cg_exp = Config.get_coingecko_expiry_2() if lbl == "Konto 2" else Config.get_coingecko_expiry()
-                md_parts.append(f"""
-### 🍬 CoinGecko Candy — {lbl} ({cg_status})
 
-| Parametr | Wartość |
-| :--- | :--- |
-| **Status operacji** | {cg_status} |
-| **➕ Przybyło cukierków** | **`{cg_gained}`** |
-| **💰 Ogólna suma cukierków** | **`{cg_total}`** |
-| **⏳ Ważność sesji** | {cg_exp['display']} |
-| **Streak (dni z rzędu)** | `{cg_res.streak}` 🔥 |
-| **Szczegóły** | {cg_res.message} |
-""")
+            md_lines.append("\n> *Automatyczne zbieranie nagród przez GitHub Actions.*")
 
-            if cmc_result:
-                cmc_gained, cmc_total, cmc_status = Notifier._compute_metrics(
-                    cmc_result.balance_before, cmc_result.balance_after, cmc_result.status, cmc_result.success, unit="💎"
-                )
-                cmc_exp = Config.get_expiry_info()
-                md_parts.append(f"""
-### 💎 CoinMarketCap Diamonds ({cmc_status})
+            warnings = [f"- ⚠️ **{acc['full_name']}**: {acc['warning']}" for acc in accounts_data if acc.get("warning")]
+            errors = [f"- ❌ **{acc['full_name']}**: {acc['error']}" for acc in accounts_data if acc.get("error")]
 
-| Parametr | Wartość |
-| :--- | :--- |
-| **Status operacji** | {cmc_status} |
-| **➕ Przybyło diamentów** | **`{cmc_gained}`** |
-| **💎 Ogólna suma diamentów** | **`{cmc_total}`** |
-| **⏳ Ważność sesji** | {cmc_exp['display']} |
-| **Streak (dni z rzędu)** | `{cmc_result.streak}` 🔥 |
-| **Szczegóły** | {cmc_result.message} |
-""")
+            if warnings or errors:
+                md_lines.append("\n### ⚠️ Uwagi i błędy")
+                md_lines.extend(warnings)
+                md_lines.extend(errors)
 
-            md_parts.append("\n---\n*Automatyczne zbieranie nagród przez GitHub Actions.*")
             try:
                 with open(summary_path, "a", encoding="utf-8") as f:
-                    f.write("\n".join(md_parts))
+                    f.write("\n".join(md_lines) + "\n\n")
             except Exception as e:
                 print(f"[!] Błąd zapisu GITHUB_STEP_SUMMARY: {e}")
 
-        # 2. Wyślij JEDNĄ wiadomość na Discord (z kartami embed dla każdego konta)
+        # 2. Wyślij JEDNĄ wiadomość na Discord (dokładnie jeden embed z czytelną tabelką)
         if Config.DISCORD_WEBHOOK_URL:
-            embeds = []
-            for cg_res in cg_results:
-                embeds.append(Notifier._build_cg_embed(cg_res))
-            if cmc_result:
-                embeds.append(Notifier._build_cmc_embed(cmc_result))
+            embed = Notifier._build_unified_embed(accounts_data)
+            payload = {
+                "username": "Crypto Daily Rewards",
+                "avatar_url": "https://s2.coinmarketcap.com/static/cloud/img/coinmarketcap_logo_mobile.png",
+                "embeds": [embed],
+            }
+            try:
+                res = requests.post(
+                    Config.DISCORD_WEBHOOK_URL,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=10,
+                )
+                if res.status_code in (200, 204):
+                    print("[+] Jedno wspólne powiadomienie z tabelką wysłane na Discord.")
+                else:
+                    print(f"[!] Błąd wysyłania na Discord (kod {res.status_code}): {res.text}")
+            except Exception as e:
+                print(f"[!] Nie udało się wysłać powiadomienia Discord: {e}")
 
-            if embeds:
-                payload = {
-                    "username": "Crypto Daily Rewards",
-                    "avatar_url": "https://s2.coinmarketcap.com/static/cloud/img/coinmarketcap_logo_mobile.png",
-                    "embeds": embeds,
-                }
-                try:
-                    res = requests.post(
-                        Config.DISCORD_WEBHOOK_URL,
-                        json=payload,
-                        headers={"Content-Type": "application/json"},
-                        timeout=10,
-                    )
-                    if res.status_code in (200, 204):
-                        print("[+] Wspólne powiadomienie Discord wysłane pomyślnie.")
-                    else:
-                        print(f"[!] Błąd wysyłania na Discord (kod {res.status_code}): {res.text}")
-                except Exception as e:
-                    print(f"[!] Nie udało się wysłać powiadomienia Discord: {e}")
-
-        # 3. Wyślij JEDNĄ wiadomość na Telegram
+        # 3. Wyślij JEDNĄ wiadomość na Telegram (z tabelką w bloku <pre>)
         if Config.TELEGRAM_BOT_TOKEN and Config.TELEGRAM_CHAT_ID:
-            sections = ["<b>🎁 Codzienny Raport Nagród Krypto</b>\n"]
-            for cg_res in cg_results:
-                lbl = getattr(cg_res, "account_label", "") or "Konto 1"
-                cg_gained, cg_total, cg_status = Notifier._compute_metrics(
-                    cg_res.balance_before, cg_res.balance_after, cg_res.status, cg_res.success, unit="🍬"
+            table_str = Notifier._build_unified_table(accounts_data)
+            tg_lines = [
+                "<b>🎁 Codzienny Raport Nagród Krypto</b>\n",
+                f"<pre>{table_str}</pre>\n",
+                "<b>Szczegóły kont:</b>",
+            ]
+            for acc in accounts_data:
+                tg_lines.append(
+                    f"• {acc['icon']} <b>{acc['name']}</b>: Streak: {acc['streak']} 🔥 • Sesja: {acc['expiry_display']}"
                 )
-                cg_exp = Config.get_coingecko_expiry_2() if lbl == "Konto 2" else Config.get_coingecko_expiry()
-                sections.append(
-                    f"<b>🍬 CoinGecko ({lbl}):</b>\n"
-                    f"• Status: {cg_status}\n"
-                    f"• Przybyło: <b>{cg_gained}</b>\n"
-                    f"• Suma: <b>{cg_total}</b>\n"
-                    f"• Streak: {cg_res.streak}\n"
-                    f"• Ważność sesji: {cg_exp['display']}\n"
-                )
-            if cmc_result:
-                cmc_gained, cmc_total, cmc_status = Notifier._compute_metrics(
-                    cmc_result.balance_before, cmc_result.balance_after, cmc_result.status, cmc_result.success, unit="💎"
-                )
-                cmc_exp = Config.get_expiry_info()
-                sections.append(
-                    f"<b>💎 CoinMarketCap:</b>\n"
-                    f"• Status: {cmc_status}\n"
-                    f"• Przybyło: <b>{cmc_gained}</b>\n"
-                    f"• Suma: <b>{cmc_total}</b>\n"
-                    f"• Streak: {cmc_result.streak}\n"
-                    f"• Ważność sesji: {cmc_exp['display']}\n"
-                )
+
+            warnings = [f"• ⚠️ <b>{acc['name']}</b>: {acc['warning']}" for acc in accounts_data if acc.get("warning")]
+            if warnings:
+                tg_lines.append("\n<b>⚠️ Ostrzeżenia:</b>")
+                tg_lines.extend(warnings)
+
+            errors = [f"• ❌ <b>{acc['name']}</b>: {acc['error']}" for acc in accounts_data if acc.get("error")]
+            if errors:
+                tg_lines.append("\n<b>❌ Błędy:</b>")
+                tg_lines.extend(errors)
 
             url = f"https://api.telegram.org/bot{Config.TELEGRAM_BOT_TOKEN}/sendMessage"
             payload = {
                 "chat_id": Config.TELEGRAM_CHAT_ID,
-                "text": "\n".join(sections),
+                "text": "\n".join(tg_lines),
                 "parse_mode": "HTML",
             }
             try:
