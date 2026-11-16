@@ -24,21 +24,30 @@ from src.claimer import ClaimResult
 class CoinGeckoClaimer:
     """
     Klient do automatycznego odbioru codziennych cukierków z platformy CoinGecko.
+    Obsługuje wiele kont oraz różne profile przeglądarek (anti-ban / fingerprinting).
     """
-    def __init__(self):
-        self.cookies = Config.get_coingecko_cookies()
+    def __init__(
+        self,
+        cookies: Optional[dict] = None,
+        account_label: str = "Konto 1",
+        impersonate_profile: str = "chrome124",
+        user_agent: Optional[str] = None,
+    ):
+        self.account_label = account_label
+        self.impersonate_profile = impersonate_profile
+        self.cookies = cookies if cookies is not None else Config.get_coingecko_cookies()
         if not self.cookies:
             raise ValueError(
-                "Brak ciasteczek CoinGecko! Ustaw zmienną środowiskową COINGECKO_COOKIE w GitHub Secrets lub .env."
+                f"Brak ciasteczek CoinGecko dla {account_label}! Ustaw odpowiednią zmienną środowiskową (COINGECKO_COOKIE lub COINGECKO_COOKIE_2)."
             )
 
         if HAS_CURL_CFFI:
-            self.session = cffi_requests.Session(impersonate="chrome124")
+            self.session = cffi_requests.Session(impersonate=self.impersonate_profile)
         else:
             self.session = cffi_requests.Session()
 
         if Config.PROXY_URL:
-            print("[*] CoinGecko: Korzystanie ze skonfigurowanego serwera proxy.")
+            print(f"[*] CoinGecko [{self.account_label}]: Korzystanie ze skonfigurowanego serwera proxy.")
             self.session.proxies = {
                 "http": Config.PROXY_URL,
                 "https": Config.PROXY_URL,
@@ -47,12 +56,14 @@ class CoinGeckoClaimer:
         # Przygotuj jeden czysty nagłówek Cookie ze sparsowanych, niezbędnych ciasteczek (bez duplikacji)
         clean_cookie_str = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
 
+        default_ua = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            if account_label == "Konto 1" else
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0"
+        )
+
         self.headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
+            "User-Agent": user_agent or default_ua,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9,pl;q=0.8",
             "Referer": "https://www.coingecko.com/",
@@ -67,7 +78,7 @@ class CoinGeckoClaimer:
     def _fetch_page(self, url: str):
         """Pobiera stronę z obsługą impersonacji i nagłówków."""
         if HAS_CURL_CFFI:
-            return self.session.get(url, headers=self.headers, timeout=30, impersonate="chrome124")
+            return self.session.get(url, headers=self.headers, timeout=30, impersonate=self.impersonate_profile)
         return self.session.get(url, headers=self.headers, timeout=30)
 
     def _extract_balance(self, soup: BeautifulSoup) -> str:
@@ -124,13 +135,13 @@ class CoinGeckoClaimer:
                 "https://www.coingecko.com/accounts/csrf_meta.json",
                 headers=self.headers,
                 timeout=15,
-                impersonate="chrome124" if HAS_CURL_CFFI else None,
+                impersonate=self.impersonate_profile if HAS_CURL_CFFI else None,
             )
             if res.status_code == 200:
                 data = res.json()
                 return data.get("token")
         except Exception as e:
-            print(f"[!] CoinGecko: Błąd pobierania csrf_meta.json: {e}")
+            print(f"[!] CoinGecko [{self.account_label}]: Błąd pobierania csrf_meta.json: {e}")
         return None
 
     def _is_already_collected(self, soup: BeautifulSoup) -> bool:
@@ -149,7 +160,7 @@ class CoinGeckoClaimer:
 
     def claim(self) -> ClaimResult:
         """Główna metoda wykonująca proces zbierania cukierków."""
-        print(f"[*] Łączenie z CoinGecko ({Config.COINGECKO_CANDY_URL})...")
+        print(f"[*] [{self.account_label}] Łączenie z CoinGecko ({Config.COINGECKO_CANDY_URL})...")
 
         try:
             res = self._fetch_page(Config.COINGECKO_CANDY_URL)
@@ -157,10 +168,11 @@ class CoinGeckoClaimer:
             return ClaimResult(
                 success=False,
                 status="Błąd połączenia",
-                message=f"Nie udało się połączyć ze stroną CoinGecko: {e}",
+                message=f"Nie udało się połączyć ze stroną CoinGecko ({self.account_label}): {e}",
+                account_label=self.account_label,
             )
 
-        print(f"[*] CoinGecko odpowiedź HTTP: {res.status_code}")
+        print(f"[*] [{self.account_label}] CoinGecko odpowiedź HTTP: {res.status_code}")
 
         # Sprawdzenie blokady Cloudflare
         if res.status_code in (403, 503) and ("cloudflare" in res.text.lower() or "challenge" in res.text.lower()):
@@ -168,6 +180,7 @@ class CoinGeckoClaimer:
                 success=False,
                 status="Blokada Cloudflare",
                 message="Cloudflare zablokował żądanie IP centrum danych. Wymagany czysty tunel lub proxy.",
+                account_label=self.account_label,
             )
 
         # Sprawdzenie przekierowania do logowania (wygasła sesja)
@@ -176,37 +189,40 @@ class CoinGeckoClaimer:
                 success=False,
                 status="Sesja wygasła",
                 message=(
-                    "Ciasteczka CoinGecko straciły ważność. Zaloguj się ponownie na coingecko.com "
-                    "i zaktualizuj sekret COINGECKO_COOKIE w GitHub Secrets!"
+                    f"Ciasteczka CoinGecko ({self.account_label}) straciły ważność. Zaloguj się ponownie na coingecko.com "
+                    f"i zaktualizuj odpowiedni sekret (COINGECKO_COOKIE lub COINGECKO_COOKIE_2) w GitHub Secrets!"
                 ),
+                account_label=self.account_label,
             )
 
         if res.status_code != 200:
-            print(f"[!] Błąd serwera CoinGecko HTTP {res.status_code}: {res.text[:250]}")
+            print(f"[!] [{self.account_label}] Błąd serwera CoinGecko HTTP {res.status_code}: {res.text[:250]}")
             return ClaimResult(
                 success=False,
                 status=f"Błąd HTTP {res.status_code}",
                 message=f"Serwer CoinGecko zwrócił kod {res.status_code}: {res.text[:150]}",
+                account_label=self.account_label,
             )
 
         soup = BeautifulSoup(res.text, "html.parser")
         balance_before = self._extract_balance(soup)
         streak = self._extract_streak(soup)
 
-        print(f"[*] CoinGecko bieżący stan: {balance_before} cukierków | Streak: {streak}")
+        print(f"[*] [{self.account_label}] CoinGecko bieżący stan: {balance_before} cukierków | Streak: {streak}")
 
         if self._is_already_collected(soup):
-            print("[+] Cukierki CoinGecko zostały już dzisiaj odebrane!")
+            print(f"[+] [{self.account_label}] Cukierki CoinGecko zostały już dzisiaj odebrane!")
             return ClaimResult(
                 success=True,
                 status="Już odebrano",
-                message="Cukierki z dnia dzisiejszego zostały już wcześniej odebrane. Do zobaczenia jutro!",
+                message=f"Cukierki z dnia dzisiejszego ({self.account_label}) zostały już wcześniej odebrane. Do zobaczenia jutro!",
                 balance_before=balance_before,
                 balance_after=balance_before,
                 streak=streak,
+                account_label=self.account_label,
             )
 
-        print("[*] Cukierki są gotowe do odebrania! Pobieranie tokenu CSRF...")
+        print(f"[*] [{self.account_label}] Cukierki są gotowe do odebrania! Pobieranie tokenu CSRF...")
         csrf_token = self._fetch_csrf_token()
         if not csrf_token:
             meta_tag = soup.find("meta", {"name": "csrf-token"})
@@ -217,14 +233,15 @@ class CoinGeckoClaimer:
             return ClaimResult(
                 success=False,
                 status="Błąd CSRF",
-                message="Nie udało się pobrać tokenu autoryzacji CSRF z CoinGecko.",
+                message=f"Nie udało się pobrać tokenu autoryzacji CSRF z CoinGecko ({self.account_label}).",
                 balance_before=balance_before,
                 balance_after=balance_before,
                 streak=streak,
+                account_label=self.account_label,
             )
 
         check_in_url = "https://www.coingecko.com/en/candy/daily_check_in"
-        print(f"[*] Wysyłanie żądania odbioru do: {check_in_url}...")
+        print(f"[*] [{self.account_label}] Wysyłanie żądania odbioru do: {check_in_url}...")
 
         claim_headers = {
             "Origin": Config.COINGECKO_BASE_URL,
@@ -239,19 +256,20 @@ class CoinGeckoClaimer:
                 check_in_url,
                 headers={**self.headers, **claim_headers},
                 timeout=30,
-                impersonate="chrome124" if HAS_CURL_CFFI else None,
+                impersonate=self.impersonate_profile if HAS_CURL_CFFI else None,
             )
         except Exception as e:
             return ClaimResult(
                 success=False,
                 status="Błąd żądania POST",
-                message=f"Błąd podczas wysyłania żądania odbioru cukierków: {e}",
+                message=f"Błąd podczas wysyłania żądania odbioru cukierków ({self.account_label}): {e}",
                 balance_before=balance_before,
                 balance_after=balance_before,
                 streak=streak,
+                account_label=self.account_label,
             )
 
-        print(f"[*] Odpowiedź odbioru cukierków HTTP: {claim_res.status_code}")
+        print(f"[*] [{self.account_label}] Odpowiedź odbioru cukierków HTTP: {claim_res.status_code}")
 
         new_balance = balance_before
         new_streak = streak
@@ -265,21 +283,23 @@ class CoinGeckoClaimer:
             pass
 
         if claim_res.status_code in (200, 204, 302):
-            print(f"[+] Sukces! Cukierki odebrane! Nowy bilans: {new_balance}")
+            print(f"[+] [{self.account_label}] Sukces! Cukierki odebrane! Nowy bilans: {new_balance}")
             return ClaimResult(
                 success=True,
                 status="Odebrano cukierki",
-                message=f"Pomyślnie odebrano codzienne cukierki CoinGecko! Twój nowy bilans to {new_balance}.",
+                message=f"Pomyślnie odebrano codzienne cukierki CoinGecko ({self.account_label})! Twój nowy bilans to {new_balance}.",
                 balance_before=balance_before,
                 balance_after=new_balance,
                 streak=new_streak,
+                account_label=self.account_label,
             )
         else:
             return ClaimResult(
                 success=False,
                 status=f"Błąd serwera ({claim_res.status_code})",
-                message=f"Serwer CoinGecko zwrócił kod {claim_res.status_code}: {claim_res.text[:200]}",
+                message=f"Serwer CoinGecko zwrócił kod {claim_res.status_code} ({self.account_label}): {claim_res.text[:200]}",
                 balance_before=balance_before,
                 balance_after=new_balance,
                 streak=new_streak,
+                account_label=self.account_label,
             )

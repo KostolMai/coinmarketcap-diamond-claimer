@@ -42,6 +42,7 @@ jobs:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           CMC_AUTH_TOKEN: ${{ secrets.CMC_AUTH_TOKEN }}
           COINGECKO_COOKIE: ${{ secrets.COINGECKO_COOKIE }}
+          COINGECKO_COOKIE_2: ${{ secrets.COINGECKO_COOKIE_2 }}
           PROXY_URL: ${{ secrets.PROXY_URL }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}

@@ -285,8 +285,11 @@ class Config:
         or ""
     ).strip()
 
-    # CoinGecko
+    # CoinGecko Konto 1
     RAW_COINGECKO_COOKIE: str = os.getenv("COINGECKO_COOKIE", "").strip()
+
+    # CoinGecko Konto 2
+    RAW_COINGECKO_COOKIE_2: str = os.getenv("COINGECKO_COOKIE_2", "").strip()
 
     DISCORD_WEBHOOK_URL: str = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -322,17 +325,26 @@ class Config:
         return parse_coingecko_cookies(cls.RAW_COINGECKO_COOKIE)
 
     @classmethod
+    def get_coingecko_cookies_2(cls) -> dict:
+        return parse_coingecko_cookies(cls.RAW_COINGECKO_COOKIE_2)
+
+    @classmethod
     def has_cmc(cls) -> bool:
         return bool(cls.get_token())
 
     @classmethod
     def has_coingecko(cls) -> bool:
         cookies = cls.get_coingecko_cookies()
-        return bool(cookies.get("_coingecko_session") or len(cookies) > 0)
+        return bool(cookies.get("_session_id") or cookies.get("_coingecko_session") or len(cookies) > 0)
+
+    @classmethod
+    def has_coingecko_2(cls) -> bool:
+        cookies = cls.get_coingecko_cookies_2()
+        return bool(cookies.get("_session_id") or cookies.get("_coingecko_session") or len(cookies) > 0)
 
     @classmethod
     def validate(cls) -> bool:
-        return cls.has_cmc() or cls.has_coingecko()
+        return cls.has_cmc() or cls.has_coingecko() or cls.has_coingecko_2()
 
     @classmethod
     def get_expiry_info(cls) -> dict:
@@ -341,4 +353,8 @@ class Config:
     @classmethod
     def get_coingecko_expiry(cls) -> dict:
         return get_coingecko_expiry_info(cls.get_coingecko_cookies())
+
+    @classmethod
+    def get_coingecko_expiry_2(cls) -> dict:
+        return get_coingecko_expiry_info(cls.get_coingecko_cookies_2())
 

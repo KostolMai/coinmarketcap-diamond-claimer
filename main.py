@@ -58,40 +58,103 @@ def main():
     if Config.has_coingecko():
         cg_expiry = Config.get_coingecko_expiry()
         if cg_expiry.get("has_expiry"):
-            print(f"[*] Ważność sesji CoinGecko: {cg_expiry['display']}")
+            print(f"[*] Ważność sesji CoinGecko (Konto 1): {cg_expiry['display']}")
             if cg_expiry.get("warning_level") in ("warning", "critical", "expired"):
-                print(f"[!] OSTRZEŻENIE SESJI CoinGecko: {cg_expiry['warning_message']}")
+                print(f"[!] OSTRZEŻENIE SESJI CoinGecko (Konto 1): {cg_expiry['warning_message']}")
 
-    cg_result = None
+    if Config.has_coingecko_2():
+        cg2_expiry = Config.get_coingecko_expiry_2()
+        if cg2_expiry.get("has_expiry"):
+            print(f"[*] Ważność sesji CoinGecko (Konto 2): {cg2_expiry['display']}")
+            if cg2_expiry.get("warning_level") in ("warning", "critical", "expired"):
+                print(f"[!] OSTRZEŻENIE SESJI CoinGecko (Konto 2): {cg2_expiry['warning_message']}")
+
+    cg_results = []
     cmc_result = None
     failures = 0
 
-    # 1. Odbiór CoinGecko Candy
+    # 1. Odbiór CoinGecko Candy — Konto 1
     if Config.has_coingecko():
         print("\n" + "-" * 50)
-        print("🍬 [1/2] Rozpoczynanie odbioru CoinGecko Candy...")
+        print("🍬 [1/3] Rozpoczynanie odbioru CoinGecko Candy (Konto 1)...")
         print("-" * 50)
         try:
             from src.claimer_coingecko import CoinGeckoClaimer
-            cg_claimer = CoinGeckoClaimer()
-            cg_result = cg_claimer.claim()
-            if not cg_result.success:
+            cg_claimer = CoinGeckoClaimer(
+                cookies=Config.get_coingecko_cookies(),
+                account_label="Konto 1",
+                impersonate_profile="chrome124",
+            )
+            res1 = cg_claimer.claim()
+            cg_results.append(res1)
+            if not res1.success:
                 failures += 1
         except Exception as e:
-            print(f"[!] Błąd krytyczny podczas odbioru CoinGecko: {e}", file=sys.stderr)
-            cg_result = ClaimResult(
+            print(f"[!] Błąd krytyczny podczas odbioru CoinGecko (Konto 1): {e}", file=sys.stderr)
+            cg_results.append(ClaimResult(
                 success=False,
                 status="Błąd krytyczny",
-                message=f"Wystąpił nieoczekiwany wyjątek CoinGecko: {e}",
-            )
+                message=f"Wystąpił nieoczekiwany wyjątek CoinGecko (Konto 1): {e}",
+                account_label="Konto 1",
+            ))
             failures += 1
     else:
-        print("\n[*] COINGECKO_COOKIE nie jest skonfigurowane — pomijanie CoinGecko.")
+        print("\n[*] COINGECKO_COOKIE nie jest skonfigurowane — pomijanie Konta 1 CoinGecko.")
 
-    # 2. Odbiór CoinMarketCap Diamonds
+    # 2. Odbiór CoinGecko Candy — Konto 2 (zabezpieczenia Anti-Ban)
+    if Config.has_coingecko_2():
+        import time
+        import random
+        import subprocess
+
+        # Losowy odstęp (jitter) 75 - 130 sekund, aby zapytania nie leciały jednocześnie
+        delay = random.randint(75, 130)
+        print("\n" + "-" * 50)
+        print(f"⏳ [Anti-Ban] Odczekiwanie {delay} sekund przed obsługą Konta 2 (symulacja człowieka)...")
+        print("-" * 50)
+        time.sleep(delay)
+
+        # Odświeżenie połączenia Cloudflare WARP, aby przydzielić inny adres IP
+        try:
+            subprocess.run(["warp-cli", "disconnect"], capture_output=True, timeout=5)
+            time.sleep(2)
+            subprocess.run(["warp-cli", "connect"], capture_output=True, timeout=5)
+            time.sleep(2)
+            print("[*] [Anti-Ban] Zresetowano połączenie Cloudflare WARP (nowa tożsamość sieciowa).")
+        except Exception:
+            pass
+
+        print("\n" + "-" * 50)
+        print("🍬 [2/3] Rozpoczynanie odbioru CoinGecko Candy (Konto 2)...")
+        print("-" * 50)
+        try:
+            from src.claimer_coingecko import CoinGeckoClaimer
+            # Użyj innego fingerprintu TLS/przeglądarki dla drugiego konta
+            cg2_claimer = CoinGeckoClaimer(
+                cookies=Config.get_coingecko_cookies_2(),
+                account_label="Konto 2",
+                impersonate_profile="edge101",
+            )
+            res2 = cg2_claimer.claim()
+            cg_results.append(res2)
+            if not res2.success:
+                failures += 1
+        except Exception as e:
+            print(f"[!] Błąd krytyczny podczas odbioru CoinGecko (Konto 2): {e}", file=sys.stderr)
+            cg_results.append(ClaimResult(
+                success=False,
+                status="Błąd krytyczny",
+                message=f"Wystąpił nieoczekiwany wyjątek CoinGecko (Konto 2): {e}",
+                account_label="Konto 2",
+            ))
+            failures += 1
+    else:
+        print("\n[*] COINGECKO_COOKIE_2 nie jest skonfigurowane — pomijanie Konta 2 CoinGecko.")
+
+    # 3. Odbiór CoinMarketCap Diamonds
     if Config.has_cmc():
         print("\n" + "-" * 50)
-        print("💎 [2/2] Rozpoczynanie odbioru CoinMarketCap Diamonds...")
+        print("💎 [3/3] Rozpoczynanie odbioru CoinMarketCap Diamonds...")
         print("-" * 50)
         try:
             cmc_claimer = CMCClaimer()
@@ -109,16 +172,17 @@ def main():
     else:
         print("\n[*] CMC_AUTH_TOKEN nie jest skonfigurowane — pomijanie CoinMarketCap.")
 
-    # 3. Wyślij JEDNO wspólne powiadomienie (na Discord z obydwoma embedami w jednej wiadomości)
-    Notifier.notify_combined(cg_result=cg_result, cmc_result=cmc_result)
+    # 4. Wyślij JEDNO wspólne powiadomienie (na Discord ze wszystkimi embedami w jednej wiadomości)
+    Notifier.notify_combined(cg_results=cg_results, cmc_result=cmc_result)
 
-    # 4. Podsumowanie w konsoli
+    # 5. Podsumowanie w konsoli
     print("\n" + "=" * 65)
     print("📊 PODSUMOWANIE DZISIEJSZEGO ODBIORU:")
-    if cg_result:
-        print(f"🍬 CoinGecko:      {cg_result.status} | Bilans: {cg_result.balance_after} | Streak: {cg_result.streak}")
+    for cg_res in cg_results:
+        lbl = getattr(cg_res, "account_label", "") or "Konto 1"
+        print(f"🍬 CoinGecko ({lbl}): {cg_res.status} | Bilans: {cg_res.balance_after} | Streak: {cg_res.streak}")
     if cmc_result:
-        print(f"💎 CoinMarketCap:  {cmc_result.status} | Bilans: {cmc_result.balance_after} | Streak: {cmc_result.streak}")
+        print(f"💎 CoinMarketCap:           {cmc_result.status} | Bilans: {cmc_result.balance_after} | Streak: {cmc_result.streak}")
     print("=" * 65)
 
     if failures > 0:

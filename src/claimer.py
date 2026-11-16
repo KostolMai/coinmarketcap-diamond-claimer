@@ -29,6 +29,7 @@ class ClaimResult:
     balance_before: str = "Brak danych"
     balance_after: str = "Brak danych"
     streak: str = "Brak danych"
+    account_label: str = ""
 
 
 class CMCClaimer:
